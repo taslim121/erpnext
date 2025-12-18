@@ -502,7 +502,13 @@ class SalesInvoice(SellingController):
 		if cint(self.is_pos) != 1 and not self.is_return:
 			self.update_against_document_in_jv()
 
-		self.update_time_sheet(self.name)
+		# Update timesheet billing status
+		if self.is_return and self.return_against:
+			# For return invoices, unbill timesheets from the original invoice
+			self.unbill_timesheets_on_return()
+		else:
+			# For normal invoices, mark timesheets as billed
+			self.update_time_sheet(self.name)
 
 		if frappe.get_single_value("Selling Settings", "sales_update_frequency") == "Each Transaction":
 			update_company_current_month_sales(self.company)
@@ -582,7 +588,14 @@ class SalesInvoice(SellingController):
 		self.check_if_consolidated_invoice()
 
 		super().before_cancel()
-		self.update_time_sheet(None)
+		
+		# Handle timesheet billing status
+		if self.is_return and self.return_against:
+			# For return invoices being cancelled, re-bill timesheets in the original invoice
+			self.rebill_timesheets_on_return_cancel()
+		else:
+			# For normal invoices being cancelled, unbill timesheets
+			self.update_time_sheet(None)
 
 	def on_cancel(self):
 		check_if_return_invoice_linked_with_payment_entry(self)
@@ -789,6 +802,44 @@ class SalesInvoice(SellingController):
 			if d.time_sheet:
 				timesheet = frappe.get_doc("Timesheet", d.time_sheet)
 				self.update_time_sheet_detail(timesheet, d, sales_invoice)
+				timesheet.calculate_total_amounts()
+				timesheet.calculate_percentage_billed()
+				timesheet.flags.ignore_validate_update_after_submit = True
+				timesheet.set_status()
+				timesheet.db_update_all()
+
+	def unbill_timesheets_on_return(self):
+		"""Unbill timesheets when a return invoice (credit note) is submitted."""
+		if not self.return_against:
+			return
+
+		# Get the original invoice
+		original_invoice = frappe.get_doc("Sales Invoice", self.return_against)
+
+		# Unbill all timesheets from the original invoice
+		for d in original_invoice.timesheets:
+			if d.time_sheet:
+				timesheet = frappe.get_doc("Timesheet", d.time_sheet)
+				self.update_time_sheet_detail(timesheet, d, None)
+				timesheet.calculate_total_amounts()
+				timesheet.calculate_percentage_billed()
+				timesheet.flags.ignore_validate_update_after_submit = True
+				timesheet.set_status()
+				timesheet.db_update_all()
+
+	def rebill_timesheets_on_return_cancel(self):
+		"""Re-bill timesheets when a return invoice (credit note) is cancelled."""
+		if not self.return_against:
+			return
+
+		# Get the original invoice
+		original_invoice = frappe.get_doc("Sales Invoice", self.return_against)
+
+		# Re-bill all timesheets to the original invoice
+		for d in original_invoice.timesheets:
+			if d.time_sheet:
+				timesheet = frappe.get_doc("Timesheet", d.time_sheet)
+				self.update_time_sheet_detail(timesheet, d, self.return_against)
 				timesheet.calculate_total_amounts()
 				timesheet.calculate_percentage_billed()
 				timesheet.flags.ignore_validate_update_after_submit = True

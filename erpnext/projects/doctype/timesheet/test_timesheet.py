@@ -68,6 +68,51 @@ class TestTimesheet(ERPNextTestSuite):
 		self.assertEqual(item.qty, 2.00)
 		self.assertEqual(item.rate, 50.00)
 
+	def test_sales_invoice_return_unbills_timesheet(self):
+		"""Test that timesheet is properly unbilled when a return invoice is submitted."""
+		emp = make_employee("test_employee_7@salary.com")
+
+		# Create and bill a timesheet
+		timesheet = make_timesheet(emp, simulate=True, is_billable=1)
+		sales_invoice = make_sales_invoice(timesheet.name, "_Test Item", "_Test Customer", currency="INR")
+		sales_invoice.due_date = nowdate()
+		sales_invoice.submit()
+		
+		# Verify timesheet is billed
+		timesheet.reload()
+		self.assertEqual(timesheet.status, "Billed")
+		self.assertEqual(timesheet.time_logs[0].sales_invoice, sales_invoice.name)
+		self.assertEqual(timesheet.total_billed_hours, 2.0)
+		self.assertEqual(timesheet.total_billed_amount, 100.0)
+		self.assertEqual(timesheet.per_billed, 100.0)
+
+		# Create a return invoice (credit note)
+		from erpnext.accounts.doctype.sales_invoice.sales_invoice import make_sales_return
+		return_invoice = make_sales_return(sales_invoice.name)
+		return_invoice.submit()
+
+		# Verify timesheet is unbilled after return invoice submission
+		timesheet.reload()
+		self.assertEqual(timesheet.status, "Submitted")
+		self.assertIsNone(timesheet.time_logs[0].sales_invoice)
+		self.assertEqual(timesheet.total_billed_hours, 0.0)
+		self.assertEqual(timesheet.total_billed_amount, 0.0)
+		self.assertEqual(timesheet.per_billed, 0.0)
+
+		# Cancel the return invoice
+		return_invoice.cancel()
+
+		# Verify timesheet is re-billed after return invoice cancellation
+		timesheet.reload()
+		self.assertEqual(timesheet.status, "Billed")
+		self.assertEqual(timesheet.time_logs[0].sales_invoice, sales_invoice.name)
+		self.assertEqual(timesheet.total_billed_hours, 2.0)
+		self.assertEqual(timesheet.total_billed_amount, 100.0)
+		self.assertEqual(timesheet.per_billed, 100.0)
+
+		# Cleanup
+		sales_invoice.cancel()
+
 	@IntegrationTestCase.change_settings("Projects Settings", {"fetch_timesheet_in_sales_invoice": 1})
 	def test_timesheet_billing_based_on_project(self):
 		emp = make_employee("test_employee_6@salary.com")
